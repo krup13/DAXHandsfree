@@ -1,10 +1,23 @@
+from DialogFlowIntegration import DialogFlowIntegration
+import uuid
+
 class DriverIntentProcessor:
     def __init__(self):
         """
-        Process driver intents and queries
+        Process driver intents and queries using DialogFlow
         - Specialized for driver vocabulary and needs
-        - Context-aware processing for partial inputs
+        - Context-aware processing with session management
+        - Fallback to keyword matching if DialogFlow is not configured
         """
+        # Initialize DialogFlow
+        try:
+            self.dialogflow = DialogFlowIntegration()
+            self.use_dialogflow = True
+            print("DialogFlow integration initialized successfully")
+        except Exception as e:
+            print(f"DialogFlow initialization failed: {str(e)}")
+            print("Falling back to keyword-based intent detection")
+            self.use_dialogflow = False
         # Define intent categories and keywords
         self.intent_keywords = {
             "earnings": ["earn", "money", "income", "how much", "today", "week", "earnings", "made", "profit",
@@ -14,16 +27,19 @@ class DriverIntentProcessor:
             "hotspot": ["busy", "customer", "hotspot", "demand", "area", "where to go", "passengers", "pickup",
                         "riders"],
             "break": ["rest", "stop", "break", "tired", "pause", "coffee", "eat", "lunch", "bathroom", "toilet"],
-            "help": ["help", "support", "assist", "emergency", "problem", "issue", "trouble", "stuck", "accident"]
+            "help": ["help", "support", "assist", "emergency", "problem", "issue", "trouble", "stuck", "accident"],
+            "accept_ride": ["accept", "yes", "take", "okay", "sure", "confirm", "got it"],
+            "reject_ride": ["reject", "no", "deny", "decline", "pass", "skip", "not now"]
         }
 
         print("Driver Intent Processor initialized")
 
     def extract_intent(self, text, context=None):
         """
-        Extract intent from recognized text
+        Extract intent from recognized text using DialogFlow or fallback to keyword matching
         - Uses context from current ride status
         - Handles incomplete commands
+        - Maintains session context for better understanding
 
         Parameters:
         - text: Recognized speech text
@@ -36,6 +52,21 @@ class DriverIntentProcessor:
         """
         if not text or len(text.strip()) == 0:
             return "unknown", {}, 0.0
+
+        # Try DialogFlow first if available
+        if self.use_dialogflow:
+            try:
+                # Generate a session ID based on driver ID or use a temporary one
+                session_id = context.get('driver_id', str(uuid.uuid4()))
+                intent, entities, confidence = self.dialogflow.detect_intent(text, session_id)
+                
+                # If DialogFlow returns a valid intent with good confidence, use it
+                if intent != "unknown" and confidence > 0.5:
+                    return intent, entities, confidence
+                
+                print("DialogFlow confidence too low, falling back to keyword matching")
+            except Exception as e:
+                print(f"DialogFlow error: {str(e)}, falling back to keyword matching")
 
         # Normalize text
         text = text.lower().strip()

@@ -2,6 +2,9 @@
 <html>
 <head>
     <title>DAX Assistant - Voice Chat</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -17,14 +20,129 @@
             flex-direction: column;
             height: 100vh;
         }
+        .main-container {
+            display: flex;
+            gap: 20px;
+            height: 100vh;
+            padding: 20px;
+        }
+
         .chat-container {
-            flex-grow: 1;
+            flex: 1;
             background: white;
             border-radius: 10px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            max-width: 800px;
+        }
+
+        .ride-container {
+            flex: 1;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            max-width: 400px;
+        }
+
+        .map-container {
+            height: 300px;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .ride-list {
+            flex-grow: 1;
+            overflow-y: auto;
+        }
+
+        .ride-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 10px;
+            border: 1px solid #dee2e6;
+            position: relative;
+        }
+
+        .ride-popup {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            z-index: 1000;
+            display: none;
+        }
+
+        .ride-popup.active {
+            display: block;
+            animation: popIn 0.3s ease-out;
+        }
+
+        @keyframes popIn {
+            0% { transform: translate(-50%, -50%) scale(0.8); opacity: 0; }
+            100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+        }
+
+        .voice-prompt {
+            background: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            display: none;
+            animation: fadeInUp 0.3s ease-out;
+        }
+
+        @keyframes fadeInUp {
+            0% { transform: translate(-50%, 20px); opacity: 0; }
+            100% { transform: translate(-50%, 0); opacity: 1; }
+        }
+
+        .ride-card.active {
+            border: 2px solid #4CAF50;
+        }
+
+        .ride-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .busy-areas {
+            margin-top: 20px;
+        }
+
+        .busy-area-card {
+            background: #fff3e0;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 8px;
+        }
+
+        .surge-high {
+            background: #ffebee;
+        }
+
+        .surge-medium {
+            background: #fff3e0;
+        }
+
+        .surge-low {
+            background: #e8f5e9;
         }
         .chat-header {
             padding: 20px;
@@ -162,7 +280,7 @@
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="main-container">
         <div class="chat-container">
             <div class="chat-header">
                 <h1>DAX Assistant - Voice Chat</h1>
@@ -192,7 +310,260 @@
         </div>
     </div>
 
+        <div class="ride-container">
+            <h2>Ride Management</h2>
+            <div class="map-container" id="map"></div>
+            <div class="ride-list" id="ride-list">
+                <!-- Rides will be added here dynamically -->
+            </div>
+            <div class="busy-areas" id="busy-areas">
+                <h3>Busy Areas</h3>
+                <!-- Busy areas will be added here dynamically -->
+            </div>
+        </div>
+    </div>
+
     <script>
+    // Initialize Socket.IO and Speech Synthesis
+    const socket = io();
+    const synth = window.speechSynthesis;
+
+    // Initialize map
+    const map = L.map('map').setView([3.1390, 101.6869], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    let markers = {};
+    let activeRideMarker = null;
+
+    // Socket.IO event handlers
+    socket.on('connect', () => {
+        console.log('Connected to server');
+        addMessage("Connected to real-time updates", false);
+    });
+
+    socket.on('new_ride_available', (ride) => {
+        addRideCard(ride);
+        addMessage(`New ride request: ${ride.pickup_location} to ${ride.dropoff_location}`, false);
+        
+        // Show popup and voice prompt
+        showRidePopup(ride);
+        if (ride.voice_prompt) {
+            showVoicePrompt(ride.voice_prompt);
+            speakText(ride.voice_prompt);
+        }
+    });
+
+    socket.on('ride_status_update', (ride) => {
+        updateRideCard(ride);
+        addMessage(`Ride status updated: ${ride.status}`, false);
+        
+        // Handle voice prompt if provided
+        if (ride.voice_prompt) {
+            showVoicePrompt(ride.voice_prompt);
+            speakText(ride.voice_prompt);
+        }
+        
+        // Handle navigation if ride is accepted
+        if (ride.status === 'accepted' && ride.navigation_details) {
+            const { pickup, navigation_url } = ride.navigation_details;
+            
+            // Update map with route details
+            if (pickup) {
+                addMessage(`Route details: ${pickup.distance}km, estimated ${Math.round(pickup.duration)} minutes`, false);
+            }
+            
+            // Open Waze navigation in new tab if URL is provided
+            if (navigation_url) {
+                window.open(navigation_url, '_blank');
+            }
+            
+            // Clear any existing ride markers
+            if (activeRideMarker) {
+                activeRideMarker.remove();
+            }
+            
+            // Add marker for pickup location
+            const pickupCoords = [3.1577, 101.7114]; // Using KLCC coords as example
+            activeRideMarker = L.marker(pickupCoords)
+                .bindPopup(`Pickup: ${ride.pickup_location}`)
+                .addTo(map);
+            
+            // Center map on pickup location
+            map.setView(pickupCoords, 15);
+        }
+    });
+
+    socket.on('ride_completed', (ride) => {
+        removeRideCard(ride.id);
+        addMessage(`Ride completed: ${ride.pickup_location} to ${ride.dropoff_location}`, false);
+        
+        // Clear active ride marker
+        if (activeRideMarker) {
+            activeRideMarker.remove();
+            activeRideMarker = null;
+        }
+        
+        // Reset map view
+        map.setView([3.1390, 101.6869], 12);
+    });
+
+    socket.on('busy_areas_update', (areas) => {
+        updateBusyAreas(areas);
+    });
+
+    // Ride management functions
+    function addRideCard(ride) {
+        const rideList = document.getElementById('ride-list');
+        const card = document.createElement('div');
+        card.className = `ride-card ${ride.status === 'active' ? 'active' : ''}`;
+        card.id = `ride-${ride.id}`;
+        card.innerHTML = `
+            <h4>Ride #${ride.id}</h4>
+            <p>From: ${ride.pickup_location}</p>
+            <p>To: ${ride.dropoff_location}</p>
+            <p>Fare: RM${ride.estimated_fare}</p>
+            <p>Distance: ${ride.distance}</p>
+            <p>ETA: ${ride.estimated_time}</p>
+            <div class="ride-actions">
+                <button onclick="acceptRide('${ride.id}')" ${ride.status !== 'pending' ? 'disabled' : ''}>
+                    Accept
+                </button>
+                <button onclick="completeRide('${ride.id}')" ${ride.status !== 'accepted' ? 'disabled' : ''}>
+                    Complete
+                </button>
+            </div>
+        `;
+        rideList.appendChild(card);
+    }
+
+    function updateRideCard(ride) {
+        const card = document.getElementById(`ride-${ride.id}`);
+        if (card) {
+            card.className = `ride-card ${ride.status === 'active' ? 'active' : ''}`;
+            // Update buttons based on status
+            const actions = card.querySelector('.ride-actions');
+            actions.innerHTML = `
+                <button onclick="acceptRide('${ride.id}')" ${ride.status !== 'pending' ? 'disabled' : ''}>
+                    Accept
+                </button>
+                <button onclick="completeRide('${ride.id}')" ${ride.status !== 'accepted' ? 'disabled' : ''}>
+                    Complete
+                </button>
+            `;
+        }
+    }
+
+    function removeRideCard(rideId) {
+        const card = document.getElementById(`ride-${rideId}`);
+        if (card) {
+            card.remove();
+        }
+    }
+
+    function updateBusyAreas(areas) {
+        const busyAreasContainer = document.getElementById('busy-areas');
+        busyAreasContainer.innerHTML = '<h3>Busy Areas</h3>';
+        
+        areas.forEach(area => {
+            const areaCard = document.createElement('div');
+            areaCard.className = `busy-area-card surge-${area.demand_level}`;
+            areaCard.innerHTML = `
+                <h4>${area.name}</h4>
+                <p>Demand: ${area.demand_level}</p>
+                <p>Surge: ${area.surge_multiplier}x</p>
+            `;
+            busyAreasContainer.appendChild(areaCard);
+
+            // Update map markers
+            if (markers[area.id]) {
+                markers[area.id].remove();
+            }
+            markers[area.id] = L.marker([area.coordinates.lat, area.coordinates.lng])
+                .bindPopup(`
+                    <b>${area.name}</b><br>
+                    Demand: ${area.demand_level}<br>
+                    Surge: ${area.surge_multiplier}x
+                `)
+                .addTo(map);
+        });
+    }
+
+    // API interaction functions
+    async function acceptRide(rideId) {
+        try {
+            const response = await fetch('/api/rides/accept', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ ride_id: rideId }),
+            });
+            const data = await response.json();
+            if (response.ok) {
+                addMessage(`Accepted ride to ${data.dropoff_location}`, true);
+            } else {
+                addMessage(`Failed to accept ride: ${data.error}`, false);
+            }
+        } catch (error) {
+            console.error('Error accepting ride:', error);
+            addMessage('Failed to accept ride', false);
+        }
+    }
+
+    async function completeRide(rideId) {
+        try {
+            const response = await fetch('/api/rides/complete', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ ride_id: rideId }),
+            });
+            const data = await response.json();
+            if (response.ok) {
+                addMessage(`Completed ride to ${data.dropoff_location}`, true);
+            } else {
+                addMessage(`Failed to complete ride: ${data.error}`, false);
+            }
+        } catch (error) {
+            console.error('Error completing ride:', error);
+            addMessage('Failed to complete ride', false);
+        }
+    }
+
+    // Fetch initial data
+    async function fetchInitialData() {
+        try {
+            const [ridesResponse, busyAreasResponse] = await Promise.all([
+                fetch('/api/rides'),
+                fetch('/api/busy-areas')
+            ]);
+            
+            const rides = await ridesResponse.json();
+            const busyAreas = await busyAreasResponse.json();
+            
+            rides.forEach(ride => addRideCard(ride));
+            updateBusyAreas(busyAreas);
+        } catch (error) {
+            console.error('Error fetching initial data:', error);
+        }
+    }
+
+    // Initialize data on page load
+    window.addEventListener('load', () => {
+        fetchInitialData();
+        addMessage("👋 Hi! I'm DAX, your driving assistant. Click Start and speak to interact with me. I can help you with navigation, earnings tracking, finding busy areas, and more!", false);
+
+        // Check if browser supports speech recognition
+        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+            status.textContent = 'Speech recognition not supported in this browser.';
+            startBtn.disabled = true;
+            stopBtn.disabled = true;
+        }
+    });
+
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
     const chatMessages = document.getElementById('chat-messages');
@@ -210,17 +581,6 @@
     let restartCount = 0;
     const MAX_RESTARTS = 3;
 
-    // Add welcome message
-    window.addEventListener('load', () => {
-        addMessage("👋 Hi! I'm DAX, your driving assistant. Click Start and speak to interact with me. I can help you with navigation, earnings tracking, finding busy areas, and more!", false);
-
-        // Check if browser supports speech recognition
-        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-            status.textContent = 'Speech recognition not supported in this browser.';
-            startBtn.disabled = true;
-            stopBtn.disabled = true;
-        }
-    });
 
     // Initialize Web Speech API
     function initRecognition() {
@@ -417,6 +777,51 @@
         chatMessages.appendChild(messageDiv);
         chatMessages.scrollTop = chatMessages.scrollHeight;
         console.log(`Added ${isUser ? 'user' : 'assistant'} message:`, text);
+    }
+
+    // Show ride request popup
+    function showRidePopup(ride) {
+        const popup = document.createElement('div');
+        popup.className = 'ride-popup active';
+        popup.innerHTML = `
+            <h3>New Ride Request</h3>
+            <p>From: ${ride.pickup_location}</p>
+            <p>To: ${ride.dropoff_location}</p>
+            <p>Fare: RM${ride.estimated_fare}</p>
+            <p>Distance: ${ride.distance}</p>
+            <p>ETA: ${ride.estimated_time}</p>
+            <div style="margin-top: 15px; text-align: center;">
+                <p>Say "Accept" or "Reject"</p>
+            </div>
+        `;
+        document.body.appendChild(popup);
+        
+        // Auto-remove popup after 10 seconds
+        setTimeout(() => {
+            popup.remove();
+        }, 10000);
+    }
+
+    // Show voice prompt
+    function showVoicePrompt(text) {
+        const prompt = document.createElement('div');
+        prompt.className = 'voice-prompt';
+        prompt.textContent = text;
+        document.body.appendChild(prompt);
+        
+        // Show for 5 seconds
+        setTimeout(() => {
+            prompt.style.animation = 'fadeOutDown 0.3s ease-out';
+            setTimeout(() => prompt.remove(), 300);
+        }, 5000);
+    }
+
+    // Text-to-speech function
+    function speakText(text) {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 1;
+        utterance.pitch = 1;
+        synth.speak(utterance);
     }
 
     // Testing function to send a manual message without voice recognition
