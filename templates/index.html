@@ -1,15 +1,15 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>DAX Assistant - Handsfree</title>
+    <title>DAX Assistant - Voice Chat</title>
     <style>
-        body { 
-            font-family: Arial, sans-serif; 
-            margin: 0; 
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
             padding: 0;
             background-color: #f0f2f5;
         }
-        .container { 
+        .container {
             max-width: 800px;
             margin: 0 auto;
             padding: 20px;
@@ -83,9 +83,15 @@
             background-color: white;
             transition: all 0.3s ease;
         }
-        .recording { 
+        .recording {
             background-color: #ffeeee !important;
             border-color: #ff4444;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(255, 68, 68, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(255, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 68, 68, 0); }
         }
         button {
             padding: 12px 24px;
@@ -133,30 +139,51 @@
             color: #666;
             margin-top: 5px;
         }
+        .audio-visualizer {
+            height: 30px;
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .audio-bar {
+            width: 4px;
+            height: 10px;
+            margin: 0 2px;
+            background-color: #4CAF50;
+        }
+        .visualizing .audio-bar {
+            animation: soundBars 0.5s infinite alternate;
+        }
+        @keyframes soundBars {
+            0% { height: 5px; }
+            100% { height: 30px; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="chat-container">
             <div class="chat-header">
-                <h1>DAX Assistant - Handsfree</h1>
+                <h1>DAX Assistant - Voice Chat</h1>
             </div>
-            
+
             <div class="chat-messages" id="chat-messages">
                 <!-- Messages will be added here dynamically -->
             </div>
-            
+
             <div class="chat-input">
                 <div class="recording-box" id="recordingBox">
                     <span id="recordingStatus">Click Start to speak</span>
+                    <div class="audio-visualizer" id="audioVisualizer"></div>
                 </div>
-                
+
                 <button id="startBtn">Start</button>
                 <button id="stopBtn" disabled>Stop</button>
             </div>
-            
+
             <div class="status" id="status"></div>
-            
+
             <div class="typing-indicator" id="typing-indicator" style="display: none;">
                 <span></span>
                 <span></span>
@@ -166,114 +193,237 @@
     </div>
 
     <script>
-        let mediaRecorder;
-        let audioChunks = [];
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const chatMessages = document.getElementById('chat-messages');
+    const status = document.getElementById('status');
+    const typingIndicator = document.getElementById('typing-indicator');
+    const recordingBox = document.getElementById('recordingBox');
+    const recordingStatus = document.getElementById('recordingStatus');
+    const audioVisualizer = document.getElementById('audioVisualizer');
 
-        const startBtn = document.getElementById('startBtn');
-        const stopBtn = document.getElementById('stopBtn');
-        const recordingBox = document.getElementById('recordingBox');
-        const recordingStatus = document.getElementById('recordingStatus');
-        const status = document.getElementById('status');
-        const chatMessages = document.getElementById('chat-messages');
-        const typingIndicator = document.getElementById('typing-indicator');
+    let recognition;
+    let isRecognizing = false;
+    let fullTranscript = '';
+    let silenceTimeout = null;
+    const SILENCE_DURATION = 5000;
+    let restartCount = 0;
+    const MAX_RESTARTS = 3;
 
-        // Add welcome message
-        window.addEventListener('load', () => {
-            addMessage("👋 Hi! I'm DAX, your driving assistant. Click Start and speak to interact with me. I can help you with navigation, earnings tracking, finding busy areas, and more!", false);
-        });
-        
-        function addMessage(text, isUser = false, intent = null) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
-            
-            const messageText = document.createElement('div');
-            messageText.textContent = text;
-            messageDiv.appendChild(messageText);
-            
-            if (intent && !isUser) {
-                const intentLabel = document.createElement('div');
-                intentLabel.className = 'intent-label';
-                intentLabel.textContent = `Intent: ${intent}`;
-                messageDiv.appendChild(intentLabel);
-            }
-            
-            chatMessages.appendChild(messageDiv);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+    // Add welcome message
+    window.addEventListener('load', () => {
+        addMessage("👋 Hi! I'm DAX, your driving assistant. Click Start and speak to interact with me. I can help you with navigation, earnings tracking, finding busy areas, and more!", false);
+
+        // Check if browser supports speech recognition
+        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+            status.textContent = 'Speech recognition not supported in this browser.';
+            startBtn.disabled = true;
+            stopBtn.disabled = true;
         }
+    });
 
-        startBtn.addEventListener('click', async () => {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                mediaRecorder = new MediaRecorder(stream);
+    // Initialize Web Speech API
+    function initRecognition() {
+        // Use standard SpeechRecognition if available, otherwise use webkit prefix
+        recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+        recognition.maxAlternatives = 1;
 
-                mediaRecorder.ondataavailable = event => {
-                    audioChunks.push(event.data);
-                };
+        recognition.onstart = () => {
+            console.log('Recognition started');
+            isRecognizing = true;
+            restartCount = 0;
+            fullTranscript = ''; // Reset transcript
+            status.textContent = 'Listening...';
+            recordingBox.classList.add('recording');
+            recordingStatus.textContent = 'Recording...';
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+        };
 
-                mediaRecorder.onstop = async () => {
-                    status.textContent = 'Processing audio...';
+        recognition.onresult = (event) => {
+            console.log('Recognition result received');
 
-                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-                    const formData = new FormData();
-                    formData.append('audio', audioBlob);
+            // Clear any existing timeout when we get new speech
+            if (silenceTimeout) {
+                clearTimeout(silenceTimeout);
+                silenceTimeout = null;
+            }
 
-                    try {
-                        // Send audio data and get response
-                        const typingIndicator = document.getElementById('typing-indicator');
-                        const aiResponse = document.getElementById('ai-response');
-                        
-                        typingIndicator.style.display = 'flex';
-                        const response = await fetch('/process_audio', {
-                            method: 'POST',
-                            body: formData
-                        });
-                        
-                        const data = await response.json();
-                        typingIndicator.style.display = 'none';
-                        
-                        if (data.success) {
-                            if (data.text) {
-                                addMessage(data.text, true);
-                            }
-                            
-                            if (data.response) {
-                                addMessage(data.response, false, data.intent);
-                                
-                                // Text to speech
-                                const speech = new SpeechSynthesisUtterance(data.response);
-                                window.speechSynthesis.speak(speech);
-                            }
-                            
-                            status.textContent = 'Ready';
-                        } else {
-                            status.textContent = 'Error: ' + data.error;
-                        }
-                    } catch (err) {
-                        status.textContent = 'Error: ' + err.message;
+            let interim_transcript = '';
+
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) {
+                    fullTranscript += event.results[i][0].transcript;
+                } else {
+                    interim_transcript += event.results[i][0].transcript;
+                }
+            }
+
+            status.textContent = `Recognizing: ${interim_transcript || fullTranscript}`;
+
+            // Set a timeout to stop recognition after silence
+            if (fullTranscript || interim_transcript) {
+                silenceTimeout = setTimeout(() => {
+                    if (isRecognizing && fullTranscript) {
+                        console.log('Sending transcript after silence:', fullTranscript);
+                        addMessage(fullTranscript, true);
+                        sendToBackend(fullTranscript);
+                        fullTranscript = ''; // Reset for next recording session
+                        recognition.stop();
                     }
-                };
-
-                mediaRecorder.start();
-                recordingBox.classList.add('recording');
-                recordingStatus.textContent = 'Recording...';
-                startBtn.disabled = true;
-                stopBtn.disabled = false;
-                status.textContent = 'Listening...';
-            } catch (err) {
-                status.textContent = 'Error accessing microphone: ' + err.message;
+                }, SILENCE_DURATION);
             }
-        });
+        };
 
-        stopBtn.addEventListener('click', () => {
-            if (mediaRecorder && mediaRecorder.state === 'recording') {
-                mediaRecorder.stop();
-                recordingBox.classList.remove('recording');
-                recordingStatus.textContent = 'Processing...';
-                startBtn.disabled = false;
-                stopBtn.disabled = true;
-                audioChunks = [];
+        recognition.onerror = (event) => {
+            console.error('Speech recognition error:', event.error);
+            status.textContent = `Error: ${event.error}`;
+
+            // Don't stop for network errors, just log them
+            if (event.error === 'network') {
+                console.log('Network error occurred but continuing recognition');
+                return;
             }
-        });
-    </script>
+
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            recordingBox.classList.remove('recording');
+            isRecognizing = false;
+
+            if (silenceTimeout) {
+                clearTimeout(silenceTimeout);
+                silenceTimeout = null;
+            }
+        };
+
+        recognition.onend = () => {
+            console.log('Recognition ended');
+
+            // If recognition ended but we were still expecting it to continue
+            if (isRecognizing && restartCount < MAX_RESTARTS) {
+                restartCount++;
+                console.log(`Recognition ended unexpectedly, attempting to restart (${restartCount}/${MAX_RESTARTS})`);
+                try {
+                    // Small delay before restarting
+                    setTimeout(() => {
+                        if (isRecognizing) {
+                            recognition.start();
+                        }
+                    }, 300);
+                    return;
+                } catch (error) {
+                    console.error('Could not restart recognition:', error);
+                }
+            }
+
+            isRecognizing = false;
+            status.textContent = 'Stopped listening.';
+            typingIndicator.style.display = 'none';
+            recordingBox.classList.remove('recording');
+            recordingStatus.textContent = 'Click Start to speak';
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+
+            // If we have a transcript but haven't sent it yet
+            if (fullTranscript) {
+                console.log('Sending final transcript:', fullTranscript);
+                addMessage(fullTranscript, true);
+                sendToBackend(fullTranscript);
+                fullTranscript = '';
+            }
+        };
+    }
+
+    // Initialize recognition
+    initRecognition();
+
+    // Start recognition with error handling
+    startBtn.addEventListener('click', () => {
+        if (!isRecognizing) {
+            try {
+                // Reinitialize recognition to avoid any lingering issues
+                if (recognition) {
+                    recognition.onend = null;
+                    recognition.onresult = null;
+                    recognition.onerror = null;
+                    recognition.onstart = null;
+                }
+
+                initRecognition();
+                recognition.start();
+                typingIndicator.style.display = 'flex';
+                console.log('Start button clicked, recognition started');
+            } catch (error) {
+                console.error('Error starting recognition:', error);
+                status.textContent = `Could not start recognition: ${error.message}`;
+            }
+        }
+    });
+
+    // Stop recognition
+    stopBtn.addEventListener('click', () => {
+        if (isRecognizing) {
+            console.log('Stop button clicked');
+            if (silenceTimeout) {
+                clearTimeout(silenceTimeout);
+                silenceTimeout = null;
+            }
+            recognition.stop();
+            isRecognizing = false;
+        }
+    });
+
+    // Send recognized text to the backend
+    function sendToBackend(transcript) {
+        typingIndicator.style.display = 'flex';
+        console.log('Sending to backend:', transcript);
+
+        fetch('/process_query', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ query: transcript }),
+        })
+            .then((response) => {
+                console.log('Response received:', response);
+                return response.json();
+            })
+            .then((data) => {
+                console.log('Data from backend:', data);
+                typingIndicator.style.display = 'none';
+                if (data.response) {
+                    addMessage(data.response, false);
+                } else if (data.error) {
+                    status.textContent = `Error: ${data.error}`;
+                    console.error('Backend error:', data.error);
+                }
+            })
+            .catch((error) => {
+                typingIndicator.style.display = 'none';
+                console.error('Error sending query:', error);
+                status.textContent = 'Error sending query.';
+            });
+    }
+
+    // Add messages to the chat
+    function addMessage(text, isUser) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
+        messageDiv.textContent = text;
+        chatMessages.appendChild(messageDiv);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+        console.log(`Added ${isUser ? 'user' : 'assistant'} message:`, text);
+    }
+
+    // Testing function to send a manual message without voice recognition
+    function testSend(message) {
+        addMessage(message, true);
+        sendToBackend(message);
+    }
+</script>
 </body>
 </html>

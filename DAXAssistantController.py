@@ -69,29 +69,43 @@ class DAXAssistantController:
                 processed_audio = self.noise_suppressor.process_audio(audio_data)
                 processing_steps["noise_reduction"] = "Completed"
 
-                # This is simplified - in a real implementation, you'd need to
-                # convert this processed audio to an audio_data object for recognizer
-
             elif audio_file is not None:
                 # Save the uploaded file to a temporary file
                 import tempfile
                 import os
-                
+                from werkzeug.utils import secure_filename
+
+                # Check if file has an allowed extension
+                allowed_extensions = {'wav', 'aiff', 'flac'}
+                filename = secure_filename(audio_file.filename)
+                if '.' in filename and filename.rsplit('.', 1)[1].lower() not in allowed_extensions:
+                    return "Unsupported audio format. Please use WAV, AIFF, or FLAC.", {
+                        "error": "Unsupported audio format"}
+
                 temp_dir = tempfile.gettempdir()
                 temp_path = os.path.join(temp_dir, "temp_audio.wav")
-                
-                audio_file.save(temp_path)
-                
-                # Use the temporary file for speech recognition
-                import speech_recognition as sr
-                recognizer = sr.Recognizer()
-                with sr.AudioFile(temp_path) as source:
-                    audio_data = recognizer.record(source)
-                
-                # Clean up the temporary file
-                os.remove(temp_path)
-                
-                processing_steps["audio_processing"] = "File processed"
+
+                try:
+                    audio_file.save(temp_path)
+                    print(f"Audio file saved to: {temp_path}")
+
+                    # Use the temporary file for speech recognition
+                    import speech_recognition as sr
+                    recognizer = sr.Recognizer()
+
+                    with sr.AudioFile(temp_path) as source:
+                        print("Reading audio file...")
+                        audio_data = recognizer.record(source)
+                        print("Audio file processed successfully")
+
+                    # Clean up the temporary file
+                    os.remove(temp_path)
+
+                    processing_steps["audio_processing"] = "File processed successfully"
+                except Exception as e:
+                    error_msg = f"Error processing audio file: {str(e)}"
+                    print(error_msg)
+                    return f"Error processing audio: {str(e)}", {"error": error_msg}
             else:
                 return "No audio input provided", {"error": "No audio input"}
 
