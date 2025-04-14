@@ -12,6 +12,89 @@
             padding: 0;
             background-color: #f0f2f5;
         }
+        .nav-bar {
+            background: #4CAF50;
+            padding: 15px;
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            position: fixed;
+            top: 0;
+            width: 100%;
+            z-index: 1000;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .nav-item {
+            color: white;
+            text-decoration: none;
+            padding: 10px 20px;
+            border-radius: 20px;
+            transition: background 0.3s;
+        }
+        .nav-item:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        .nav-item.active {
+            background: white;
+            color: #4CAF50;
+        }
+        .page {
+            display: none;
+            padding-top: 70px;
+        }
+        .page.active {
+            display: block;
+        }
+        .profile-container {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .earnings-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            padding: 20px;
+        }
+        .earnings-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .customer-list {
+            margin-top: 20px;
+        }
+        .customer-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 10px;
+            border: 1px solid #dee2e6;
+        }
+        .navigation-container {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            padding: 20px;
+            height: calc(100vh - 90px);
+        }
+        .navigation-map {
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .busy-areas-list {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow-y: auto;
+            max-height: 100%;
+        }
         .container {
             max-width: 800px;
             margin: 0 auto;
@@ -280,7 +363,14 @@
     </style>
 </head>
 <body>
-    <div class="main-container">
+    <nav class="nav-bar">
+        <a href="#" class="nav-item active" data-page="chat">Chat</a>
+        <a href="#" class="nav-item" data-page="profile">Profile</a>
+        <a href="#" class="nav-item" data-page="earnings">Earnings</a>
+        <a href="#" class="nav-item" data-page="navigation">Navigation</a>
+    </nav>
+
+    <div class="page active" id="chat-page">
         <div class="chat-container">
             <div class="chat-header">
                 <h1>DAX Assistant - Voice Chat</h1>
@@ -310,7 +400,61 @@
         </div>
     </div>
 
-        <div class="ride-container">
+    <div class="page" id="profile-page">
+        <div class="profile-container">
+            <h2>Driver Profile</h2>
+            <div id="driver-profile">
+                <h3>Personal Information</h3>
+                <p><strong>Name:</strong> <span id="driver-name">John Doe</span></p>
+                <p><strong>Driver ID:</strong> <span id="driver-id">GD12345</span></p>
+                <p><strong>Rating:</strong> <span id="driver-rating">4.8 ⭐</span></p>
+                <p><strong>Total Trips:</strong> <span id="total-trips">1,234</span></p>
+                <p><strong>Member Since:</strong> <span id="member-since">January 2023</span></p>
+                
+                <h3>Vehicle Information</h3>
+                <p><strong>Vehicle Type:</strong> <span id="vehicle-type">Sedan</span></p>
+                <p><strong>License Plate:</strong> <span id="license-plate">ABC 1234</span></p>
+                <p><strong>Vehicle Model:</strong> <span id="vehicle-model">Toyota Camry 2022</span></p>
+            </div>
+        </div>
+    </div>
+
+    <div class="page" id="earnings-page">
+        <div class="earnings-container">
+            <div class="earnings-card">
+                <h3>Today's Earnings</h3>
+                <h2 id="today-earnings">RM 150.00</h2>
+                <p><strong>Trips Completed:</strong> <span id="today-trips">8</span></p>
+                <p><strong>Online Hours:</strong> <span id="today-hours">6.5</span></p>
+            </div>
+            <div class="earnings-card">
+                <h3>Weekly Summary</h3>
+                <h2 id="weekly-earnings">RM 950.00</h2>
+                <p><strong>Total Trips:</strong> <span id="weekly-trips">45</span></p>
+                <p><strong>Average Daily:</strong> <span id="weekly-average">RM 135.71</span></p>
+            </div>
+            <div class="customer-list">
+                <h3>Recent Customers</h3>
+                <div id="customer-history">
+                    <!-- Customer history will be populated dynamically -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="page" id="navigation-page">
+        <div class="navigation-container">
+            <div class="navigation-map" id="navigation-map"></div>
+            <div class="busy-areas-list">
+                <h3>Nearby Busy Areas</h3>
+                <div id="nearby-busy-areas">
+                    <!-- Busy areas will be populated dynamically -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="ride-container">
             <h2>Ride Management</h2>
             <div class="map-container" id="map"></div>
             <div class="ride-list" id="ride-list">
@@ -328,7 +472,119 @@
     const socket = io();
     const synth = window.speechSynthesis;
 
-    // Initialize map
+    // Page Navigation
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+            e.preventDefault();
+            const pageId = item.getAttribute('data-page');
+            
+            // Update active states
+            document.querySelectorAll('.nav-item').forEach(navItem => {
+                navItem.classList.remove('active');
+            });
+            document.querySelectorAll('.page').forEach(page => {
+                page.classList.remove('active');
+            });
+            
+            item.classList.add('active');
+            document.getElementById(`${pageId}-page`).classList.add('active');
+
+            // Initialize maps if needed
+            if (pageId === 'navigation') {
+                initializeNavigationMap();
+            }
+        });
+    });
+
+    // Initialize navigation map
+    let navigationMap = null;
+    function initializeNavigationMap() {
+        if (!navigationMap) {
+            navigationMap = L.map('navigation-map').setView([3.1390, 101.6869], 12);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(navigationMap);
+        }
+    }
+
+    // Mock customer history data
+    const mockCustomers = [
+        {
+            name: "Sarah Chen",
+            pickup: "KL Sentral",
+            dropoff: "KLCC",
+            fare: "RM 25.00",
+            rating: 5,
+            date: "Today 2:30 PM"
+        },
+        {
+            name: "Ahmad Razak",
+            pickup: "Bukit Bintang",
+            dropoff: "Pavilion",
+            fare: "RM 15.00",
+            rating: 4,
+            date: "Today 11:45 AM"
+        },
+        {
+            name: "Michael Wong",
+            pickup: "Mid Valley",
+            dropoff: "Bangsar",
+            fare: "RM 20.00",
+            rating: 5,
+            date: "Today 9:15 AM"
+        }
+    ];
+
+    // Populate customer history
+    function populateCustomerHistory() {
+        const customerHistory = document.getElementById('customer-history');
+        customerHistory.innerHTML = '';
+        
+        mockCustomers.forEach(customer => {
+            const card = document.createElement('div');
+            card.className = 'customer-card';
+            card.innerHTML = `
+                <h4>${customer.name}</h4>
+                <p><strong>From:</strong> ${customer.pickup}</p>
+                <p><strong>To:</strong> ${customer.dropoff}</p>
+                <p><strong>Fare:</strong> ${customer.fare}</p>
+                <p><strong>Rating:</strong> ${'⭐'.repeat(customer.rating)}</p>
+                <p><small>${customer.date}</small></p>
+            `;
+            customerHistory.appendChild(card);
+        });
+    }
+
+    // Enhanced text-to-speech function with voice selection
+    function speakText(text) {
+        // Cancel any ongoing speech
+        synth.cancel();
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        
+        // Get available voices
+        const voices = synth.getVoices();
+        
+        // Try to find a female English voice
+        const preferredVoice = voices.find(voice => 
+            voice.name.includes('Female') && 
+            voice.lang.startsWith('en-')
+        ) || voices.find(voice => 
+            voice.lang.startsWith('en-')
+        ) || voices[0];
+
+        if (preferredVoice) {
+            utterance.voice = preferredVoice;
+        }
+
+        utterance.rate = 1;
+        utterance.pitch = 1;
+        utterance.volume = 1;
+        
+        synth.speak(utterance);
+    }
+
+    // Initialize ride management map
     const map = L.map('map').setView([3.1390, 101.6869], 12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors'
@@ -554,7 +810,9 @@
     // Initialize data on page load
     window.addEventListener('load', () => {
         fetchInitialData();
+        populateCustomerHistory();
         addMessage("👋 Hi! I'm DAX, your driving assistant. Click Start and speak to interact with me. I can help you with navigation, earnings tracking, finding busy areas, and more!", false);
+        speakText("Hi! I'm DAX, your driving assistant. How can I help you today?");
 
         // Check if browser supports speech recognition
         if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
@@ -754,13 +1012,60 @@
             })
             .then((data) => {
                 console.log('Data from backend:', data);
+                console.log('Intent detected:', data.intent);
+                console.log('Entities:', data.entities);
+                console.log('Navigate to:', data.navigate_to);
+                
                 typingIndicator.style.display = 'none';
                 if (data.response) {
                     addMessage(data.response, false);
+                    
+                    // Always speak the response text
+                    speakText(data.response);
+                    
+                    // Handle navigation if navigate_to property is present
+                    if (data.navigate_to) {
+                        console.log('Navigating to:', data.navigate_to);
+                        // Extract page name from the path (e.g., "/navigation" -> "navigation")
+                        const pageName = data.navigate_to.replace('/', '');
+                        console.log('Page name extracted:', pageName);
+                        
+                        // Find the nav item with the matching data-page attribute
+                        const navItem = document.querySelector(`.nav-item[data-page="${pageName}"]`);
+                        console.log('Nav item found:', navItem);
+                        
+                        if (navItem) {
+                            // Trigger a click on the nav item to navigate to the page
+                            console.log('Clicking nav item for page:', pageName);
+                            navItem.click();
+                            console.log(`Navigated to ${pageName} page`);
+                        } else {
+                            console.error(`Navigation target not found: ${pageName}`);
+                            // List all available nav items for debugging
+                            const allNavItems = document.querySelectorAll('.nav-item');
+                            console.log('Available nav items:');
+                            allNavItems.forEach(item => {
+                                console.log(`- ${item.getAttribute('data-page')}`);
+                            });
+                        }
+                    }
                 } else if (data.error) {
                     status.textContent = `Error: ${data.error}`;
                     console.error('Backend error:', data.error);
+                    speakText("Sorry, there was an error processing your request.");
                 }
+                
+                // Add event listener to start listening again after speech ends
+                const utterance = new SpeechSynthesisUtterance("");
+                utterance.onend = function() {
+                    // Small delay before starting recognition again
+                    setTimeout(() => {
+                        if (!isRecognizing) {
+                            startBtn.click();
+                        }
+                    }, 500);
+                };
+                synth.speak(utterance);
             })
             .catch((error) => {
                 typingIndicator.style.display = 'none';

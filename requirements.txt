@@ -1,6 +1,6 @@
 Flask==2.2.3
 Werkzeug==2.2.3
-googlemaps==4.10.0
+requests-waze==0.3.1
 SpeechRecognition==3.10.0
 PyAudio==0.2.13
 pyttsx3==2.90

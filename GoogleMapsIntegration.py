@@ -14,12 +14,32 @@ class GoogleMapsIntegration:
         """
         load_dotenv()
         self.api_key = os.getenv('GOOGLE_MAPS_API_KEY')
-        if not self.api_key:
-            raise ValueError("Google Maps API key not found in environment variables")
-        
-        self.client = googlemaps.Client(key=self.api_key)
         self.region = 'MY'  # Malaysia region
-        print("Google Maps Integration initialized")
+        
+        try:
+            if not self.api_key:
+                print("Warning: Google Maps API key not found, using mock data")
+                self.client = None
+            else:
+                self.client = googlemaps.Client(key=self.api_key)
+                print("Google Maps Integration initialized with API key")
+        except ValueError as e:
+            print(f"Warning: Invalid API key ({str(e)}), using mock data")
+            self.client = None
+
+    def get_mock_route_details(self, start_address, end_address):
+        """Mock route details for testing"""
+        return {
+            'distance': 5.2,  # km
+            'duration': 15,   # minutes
+            'traffic_duration': 20,  # minutes
+            'steps': [
+                "Head north on Jalan Ampang",
+                "Turn right onto Jalan P Ramlee",
+                "Continue onto Jalan Raja Chulan"
+            ],
+            'status': 'success'
+        }
 
     def get_route_details(self, start_address, end_address):
         """
@@ -32,8 +52,12 @@ class GoogleMapsIntegration:
         Returns:
         - Dictionary containing route details (distance, time, instructions)
         """
+        # Use mock data if client is not available
+        if not self.client:
+            return self.get_mock_route_details(start_address, end_address)
+
         try:
-            # Request directions
+            # Request directions from API
             directions = self.client.directions(
                 start_address,
                 end_address,
@@ -130,6 +154,81 @@ class GoogleMapsIntegration:
                 'message': str(e)
             }
 
+    def calculate_distance(self, point1, point2):
+        """
+        Calculate the distance between two points using Google Maps Distance Matrix API
+        
+        Parameters:
+        - point1: Tuple of (latitude, longitude) for first point
+        - point2: Tuple of (latitude, longitude) for second point
+        
+        Returns:
+        - Distance in kilometers
+        """
+        try:
+            # Convert coordinates to strings
+            origin = f"{point1[0]},{point1[1]}"
+            destination = f"{point2[0]},{point2[1]}"
+            
+            # Get distance matrix
+            matrix = self.client.distance_matrix(
+                origins=[origin],
+                destinations=[destination],
+                mode="driving",
+                units="metric"
+            )
+            
+            if matrix['status'] == 'OK':
+                # Extract distance in kilometers
+                distance = matrix['rows'][0]['elements'][0]['distance']['value'] / 1000
+                return distance
+            else:
+                return float('inf')  # Return infinity if calculation fails
+        except Exception as e:
+            print(f"Error calculating distance: {str(e)}")
+            return float('inf')
+
+    def get_mock_busy_areas(self, location):
+        """Mock busy areas data for testing"""
+        return [
+            {
+                'id': 'place1',
+                'name': 'KLCC',
+                'address': 'Kuala Lumpur City Centre',
+                'type': 'shopping mall',
+                'demand_level': 'high',
+                'surge_multiplier': 1.5,
+                'coordinates': {
+                    'lat': 3.1577,
+                    'lng': 101.7114
+                }
+            },
+            {
+                'id': 'place2',
+                'name': 'KL Sentral',
+                'address': 'KL Sentral, 50470 Kuala Lumpur',
+                'type': 'train station',
+                'demand_level': 'medium',
+                'surge_multiplier': 1.2,
+                'coordinates': {
+                    'lat': 3.1340,
+                    'lng': 101.6860
+                }
+            },
+            {
+                'id': 'place3',
+                'name': 'Pavilion',
+                'address': 'Bukit Bintang, Kuala Lumpur',
+                'type': 'shopping mall',
+                'demand_level': 'high',
+                'surge_multiplier': 1.5,
+                'coordinates': {
+                    'lat': 3.1494,
+                    'lng': 101.7131
+                }
+            }
+        ]
+
     def get_busy_areas(self, location, radius=5000):
         """
         Identify busy areas with high demand using Places API
@@ -141,8 +240,12 @@ class GoogleMapsIntegration:
         Returns:
         - List of busy areas with demand levels
         """
+        # Use mock data if client is not available
+        if not self.client:
+            return self.get_mock_busy_areas(location)
+
         try:
-            # Search for places that typically indicate high activity
+            # Search for places using Places API
             keywords = ['shopping mall', 'train station', 'airport', 'business district']
             busy_areas = []
 

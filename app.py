@@ -9,14 +9,105 @@ from DriverIntentProcessor import DriverIntentProcessor
 from GoogleMapsIntegration import GoogleMapsIntegration
 import threading
 import time
+from ResponseGenerator import ResponseGenerator
 
 # Load environment variables
 load_dotenv()
 
 # Initialize Flask app and components
-app = Flask(__name__, template_folder='templates')
-socketio = SocketIO(app, cors_allowed_origins="*")
+app = Flask(__name__, template_folder='templates', static_folder='static')
+app.config['JSON_SORT_KEYS'] = False  # Prevent JSON sorting for faster responses
+app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False  # Disable pretty printing for faster responses
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 maps = GoogleMapsIntegration()
+response_generator = ResponseGenerator()
+
+# Cache for API responses
+cache = {
+    'busy_areas': {
+        'data': None,
+        'last_updated': None,
+        'ttl': 300  # 5 minutes cache
+    },
+    'earnings': {
+        'data': None,
+        'last_updated': None,
+        'ttl': 60  # 1 minute cache
+    },
+    'profile': {
+        'data': None,
+        'last_updated': None,
+        'ttl': 3600  # 1 hour cache
+    },
+    'destinations': {
+        'data': None,
+        'last_updated': None,
+        'ttl': 3600  # 1 hour cache
+    }
+}
+
+# Preload common data
+def preload_cache():
+    """Preload cache with common data to avoid initial delays"""
+    try:
+        # Preload earnings data
+        cache['earnings']['data'] = {
+            "today": {
+                "amount": 150.00,
+                "trips": 8,
+                "hours": 6.5
+            },
+            "weekly": {
+                "amount": 950.00,
+                "trips": 45,
+                "average_daily": 135.71
+            }
+        }
+        cache['earnings']['last_updated'] = datetime.now()
+        
+        # Preload profile data
+        cache['profile']['data'] = {
+            "personal": {
+                "name": "John Doe",
+                "driver_id": "GD12345",
+                "rating": 4.8,
+                "total_trips": 1234,
+                "member_since": "January 2023"
+            },
+            "vehicle": {
+                "type": "Sedan",
+                "license_plate": "ABC 1234",
+                "model": "Toyota Camry 2022"
+            }
+        }
+        cache['profile']['last_updated'] = datetime.now()
+        
+        # Preload destinations
+        cache['destinations']['data'] = MOCK_DESTINATIONS
+        cache['destinations']['last_updated'] = datetime.now()
+        
+        print("Cache preloaded successfully")
+    except Exception as e:
+        print(f"Error preloading cache: {str(e)}")
+
+# Lazy loading for voice responses
+voice_enabled = True
+
+# Greet on bootup - using a separate thread to avoid blocking
+@app.before_first_request
+def on_startup():
+    def delayed_greeting():
+        time.sleep(1)  # Delay greeting to allow UI to load first
+        if voice_enabled:
+            response_generator.generate_response("Hello! I'm DAX, your driving assistant. I'm ready to help you navigate and manage your rides.")
+    
+    # Preload cache data
+    preload_cache()
+    
+    # Start greeting in background
+    greeting_thread = threading.Thread(target=delayed_greeting)
+    greeting_thread.daemon = True
+    greeting_thread.start()
 
 # Mock data structures
 MOCK_RIDES = [
@@ -110,14 +201,30 @@ def process_query():
         # First detect intent
         intent, entities, confidence = intent_processor.extract_intent(query, context)
         print(f"Detected intent: {intent} with confidence: {confidence}")
+        print(f"Detected entities: {entities}")
 
-        # Handle ride acceptance/rejection intents
+        # Check for page navigation intents
+        if "page" in entities:
+            page_url = entities["page"]
+            response_text = f"Navigating to {intent} page"
+            response_generator.generate_response(response_text)
+            return jsonify({
+                'response': response_text,
+                'intent': intent,
+                'confidence': confidence,
+                'entities': entities,
+                'navigate_to': page_url
+            })
+        
+        # Handle different intents
         if intent == "accept_ride" and context['has_pending_ride']:
             pending_ride = next((r for r in MOCK_RIDES if r['status'] == 'pending'), None)
             if pending_ride:
                 accept_ride_response = accept_ride(pending_ride['id'])
+                response_text = f"Accepting ride from {pending_ride['pickup_location']} to {pending_ride['dropoff_location']}"
+                response_generator.generate_response(response_text)
                 return jsonify({
-                    'response': f"Accepting ride from {pending_ride['pickup_location']} to {pending_ride['dropoff_location']}",
+                    'response': response_text,
                     'intent': intent,
                     'confidence': confidence,
                     'entities': entities
@@ -127,11 +234,177 @@ def process_query():
             if pending_ride:
                 MOCK_RIDES.remove(pending_ride)
                 socketio.emit('ride_rejected', pending_ride)
+                response_text = "Ride request rejected"
+                response_generator.generate_response(response_text)
                 return jsonify({
-                    'response': "Ride request rejected",
+                    'response': response_text,
                     'intent': intent,
                     'confidence': confidence,
                     'entities': entities
+                })
+        elif intent == "earnings":
+            current_time = datetime.now()
+            
+            # Check cache first
+            if (cache['earnings']['data'] is not None and 
+                cache['earnings']['last_updated'] is not None and
+                (current_time - cache['earnings']['last_updated']).seconds < cache['earnings']['ttl']):
+                earnings = cache['earnings']['data']
+            else:
+                # Mock earnings data
+                earnings = {
+                    "today": {
+                        "amount": 150.00,
+                        "trips": 8,
+                        "hours": 6.5
+                    },
+                    "weekly": {
+                        "amount": 950.00,
+                        "trips": 45,
+                        "average_daily": 135.71
+                    }
+                }
+                # Update cache
+                cache['earnings']['data'] = earnings
+                cache['earnings']['last_updated'] = current_time
+            
+            response_text = f"Today you've earned {earnings['today']['amount']} dollars from {earnings['today']['trips']} trips over {earnings['today']['hours']} hours. Your weekly earnings are {earnings['weekly']['amount']} dollars."
+            response_generator.generate_response(response_text)
+            
+            # If not already on earnings page, navigate there
+            if "page" in entities:
+                return jsonify({
+                    'response': response_text,
+                    'intent': intent,
+                    'confidence': confidence,
+                    'entities': entities,
+                    'earnings': earnings,
+                    'navigate_to': entities["page"]
+                })
+            else:
+                return jsonify({
+                    'response': response_text,
+                    'intent': intent,
+                    'confidence': confidence,
+                    'entities': entities,
+                    'earnings': earnings
+                })
+        elif intent == "navigation" or intent == "hotspot":
+            current_time = datetime.now()
+            current_location = (3.1390, 101.6869)  # KL coordinates
+            
+            # Check cache first
+            if (cache['busy_areas']['data'] is not None and 
+                cache['busy_areas']['last_updated'] is not None and
+                (current_time - cache['busy_areas']['last_updated']).seconds < cache['busy_areas']['ttl']):
+                sorted_areas = cache['busy_areas']['data']
+            else:
+                # Get busy areas sorted by distance from current location
+                busy_areas = maps.get_busy_areas(current_location)
+                sorted_areas = []
+                
+                for area in busy_areas:
+                    area_location = (area['coordinates']['lat'], area['coordinates']['lng'])
+                    area['distance'] = maps.calculate_distance(current_location, area_location)
+                    sorted_areas.append(area)
+                
+                sorted_areas = sorted(sorted_areas, key=lambda x: x['distance'])
+                
+                # Update cache
+                cache['busy_areas']['data'] = sorted_areas
+                cache['busy_areas']['last_updated'] = current_time
+            
+            # Get top 3 areas
+            top_areas = sorted_areas[:3]
+            
+            response_text = "The top three busy areas near you are: "
+            for i, area in enumerate(top_areas, 1):
+                response_text += f"{i}. {area['name']}, {area['distance']:.1f} kilometers away. "
+            
+            response_generator.generate_response(response_text)
+            
+            # If not already on navigation page, navigate there
+            if "page" in entities:
+                return jsonify({
+                    'response': response_text,
+                    'intent': intent,
+                    'confidence': confidence,
+                    'entities': entities,
+                    'busy_areas': top_areas,
+                    'navigate_to': entities["page"]
+                })
+            else:
+                return jsonify({
+                    'response': response_text,
+                    'intent': intent,
+                    'confidence': confidence,
+                    'entities': entities,
+                    'busy_areas': top_areas
+                })
+        elif intent == "profile":
+            # Get profile data
+            current_time = datetime.now()
+            
+            # Check cache first
+            if (cache['profile']['data'] is not None and 
+                cache['profile']['last_updated'] is not None and
+                (current_time - cache['profile']['last_updated']).seconds < cache['profile']['ttl']):
+                profile = cache['profile']['data']
+            else:
+                # Mock profile data
+                profile = {
+                    "personal": {
+                        "name": "John Doe",
+                        "driver_id": "GD12345",
+                        "rating": 4.8,
+                        "total_trips": 1234,
+                        "member_since": "January 2023"
+                    },
+                    "vehicle": {
+                        "type": "Sedan",
+                        "license_plate": "ABC 1234",
+                        "model": "Toyota Camry 2022"
+                    }
+                }
+                # Update cache
+                cache['profile']['data'] = profile
+                cache['profile']['last_updated'] = current_time
+            
+            # Ensure the page entity is set for profile intent
+            if "page" not in entities:
+                entities["page"] = "/profile"
+                
+            response_text = f"Navigating to profile page. Your driver rating is {profile['personal']['rating']} stars with {profile['personal']['total_trips']} completed trips."
+            response_generator.generate_response(response_text)
+            
+            print(f"Profile response - navigate_to: {entities['page']}")
+            
+            return jsonify({
+                'response': response_text,
+                'intent': intent,
+                'confidence': confidence,
+                'entities': entities,
+                'profile': profile,
+                'navigate_to': entities["page"]
+            })
+        elif intent == "chat":
+            if "message" in entities:
+                message = {
+                    'sender': 'driver',
+                    'message': entities['message'],
+                    'timestamp': datetime.now().strftime('%H:%M:%S'),
+                    'customer_name': active_ride['passenger_name'] if active_ride else "Customer"
+                }
+                chat_history.append(message)
+                socketio.emit('new_chat_message', message)
+                response_text = f"Message sent to {message['customer_name']}: {message['message']}"
+                response_generator.generate_response(response_text)
+                return jsonify({
+                    'response': response_text,
+                    'intent': intent,
+                    'confidence': confidence,
+                    'entities': entities,
+                    'message': message
                 })
 
         # Prepare context for AI response
@@ -172,12 +445,16 @@ def process_query():
             text_response = api_response['candidates'][0]['content']['parts'][0][
                 'text'] if 'candidates' in api_response else "Sorry, I couldn't process that."
             
-            # Return both the intent information and the response
+            # Generate voice response for the AI response
+            response_generator.generate_response(text_response)
+            
+            # Return both the intent information and the response with voice flag
             return jsonify({
                 'response': text_response,
                 'intent': intent,
                 'confidence': confidence,
-                'entities': entities
+                'entities': entities,
+                'should_speak': True  # Flag to indicate the response should be spoken
             })
         else:
             print(f"API error: {response.text}")
@@ -185,6 +462,135 @@ def process_query():
     except Exception as e:
         print(f"Exception: {str(e)}")
         return jsonify({'error': f'Error processing query: {str(e)}'}), 500
+
+# Profile API Endpoints
+@app.route('/api/profile', methods=['GET'])
+def get_profile():
+    # Mock profile data
+    profile = {
+        "personal": {
+            "name": "John Doe",
+            "driver_id": "GD12345",
+            "rating": 4.8,
+            "total_trips": 1234,
+            "member_since": "January 2023"
+        },
+        "vehicle": {
+            "type": "Sedan",
+            "license_plate": "ABC 1234",
+            "model": "Toyota Camry 2022"
+        }
+    }
+    return jsonify(profile)
+
+# Earnings API Endpoints
+@app.route('/api/earnings', methods=['GET'])
+def get_earnings():
+    current_time = datetime.now()
+    
+    # Check cache first
+    if (cache['earnings']['data'] is not None and 
+        cache['earnings']['last_updated'] is not None and
+        (current_time - cache['earnings']['last_updated']).seconds < cache['earnings']['ttl']):
+        earnings = cache['earnings']['data']
+    else:
+        # Mock earnings data
+        earnings = {
+            "today": {
+                "amount": 150.00,
+                "trips": 8,
+                "hours": 6.5
+            },
+            "weekly": {
+                "amount": 950.00,
+                "trips": 45,
+                "average_daily": 135.71
+            }
+        }
+        # Update cache
+        cache['earnings']['data'] = earnings
+        cache['earnings']['last_updated'] = current_time
+    
+    # Generate voice response for earnings
+    earnings_text = f"Today you've earned {earnings['today']['amount']} dollars from {earnings['today']['trips']} trips over {earnings['today']['hours']} hours. Your weekly earnings are {earnings['weekly']['amount']} dollars."
+    response_generator.generate_response(earnings_text)
+    
+    return jsonify(earnings)
+
+@app.route('/api/earnings/history', methods=['GET'])
+def get_earnings_history():
+    # Mock customer history
+    history = [
+        {
+            "name": "Sarah Chen",
+            "pickup": "KL Sentral",
+            "dropoff": "KLCC",
+            "fare": 25.00,
+            "rating": 5,
+            "date": "Today 2:30 PM"
+        },
+        {
+            "name": "Ahmad Razak",
+            "pickup": "Bukit Bintang",
+            "dropoff": "Pavilion",
+            "fare": 15.00,
+            "rating": 4,
+            "date": "Today 11:45 AM"
+        },
+        {
+            "name": "Michael Wong",
+            "pickup": "Mid Valley",
+            "dropoff": "Bangsar",
+            "fare": 20.00,
+            "rating": 5,
+            "date": "Today 9:15 AM"
+        }
+    ]
+    return jsonify(history)
+
+# Navigation API Endpoints
+@app.route('/api/navigation/nearby-busy', methods=['GET'])
+def get_nearby_busy_areas():
+    try:
+        current_time = datetime.now()
+        
+        # Check cache first
+        if (cache['busy_areas']['data'] is not None and 
+            cache['busy_areas']['last_updated'] is not None and
+            (current_time - cache['busy_areas']['last_updated']).seconds < cache['busy_areas']['ttl']):
+            sorted_areas = cache['busy_areas']['data']
+        else:
+            # Get current location (mock for demo)
+            current_location = (3.1390, 101.6869)  # KL coordinates
+            
+            # Get busy areas sorted by distance from current location
+            busy_areas = maps.get_busy_areas(current_location)
+            
+            # Sort areas by distance from current location
+            sorted_areas = []
+            for area in busy_areas:
+                area_location = (area['coordinates']['lat'], area['coordinates']['lng'])
+                area['distance'] = maps.calculate_distance(current_location, area_location)
+                sorted_areas.append(area)
+            
+            sorted_areas = sorted(sorted_areas, key=lambda x: x['distance'])
+            
+            # Update cache
+            cache['busy_areas']['data'] = sorted_areas
+            cache['busy_areas']['last_updated'] = current_time
+        
+        # Generate voice response for top 3 busy areas
+        if sorted_areas:
+            top_three = sorted_areas[:3]
+            areas_text = "The top three busy areas near you are: "
+            for i, area in enumerate(top_three, 1):
+                areas_text += f"{i}. {area['name']}, {area['distance']:.1f} kilometers away. "
+            response_generator.generate_response(areas_text)
+        
+        return jsonify(sorted_areas)
+    except Exception as e:
+        print(f"Error getting nearby busy areas: {str(e)}")
+        return jsonify([])
 
 # Ride Management API Endpoints
 @app.route('/api/rides', methods=['GET'])
@@ -268,6 +674,47 @@ def get_busy_areas():
         print(f"Error getting busy areas: {str(e)}")
         return jsonify([])
 
+# Chat functionality
+chat_history = []
+
+@app.route('/api/chat/send', methods=['POST'])
+def send_chat_message():
+    data = request.json
+    if not data or 'message' not in data or 'customer_name' not in data:
+        return jsonify({'error': 'Invalid request'}), 400
+    
+    message = {
+        'sender': 'driver',
+        'message': data['message'],
+        'timestamp': datetime.now().strftime('%H:%M:%S'),
+        'customer_name': data['customer_name']
+    }
+    chat_history.append(message)
+    socketio.emit('new_chat_message', message)
+    return jsonify(message)
+
+@app.route('/api/chat/receive', methods=['POST'])
+def receive_chat_message():
+    data = request.json
+    if not data or 'message' not in data or 'customer_name' not in data:
+        return jsonify({'error': 'Invalid request'}), 400
+    
+    message = {
+        'sender': 'customer',
+        'message': data['message'],
+        'timestamp': datetime.now().strftime('%H:%M:%S'),
+        'customer_name': data['customer_name']
+    }
+    chat_history.append(message)
+    # Generate voice response for customer message
+    response_generator.generate_response(f"{message['customer_name']} says {message['message']}")
+    socketio.emit('new_chat_message', message)
+    return jsonify(message)
+
+@app.route('/api/chat/history', methods=['GET'])
+def get_chat_history():
+    return jsonify(chat_history)
+
 # WebSocket Events
 @socketio.on('connect')
 def handle_connect():
@@ -280,45 +727,107 @@ def handle_disconnect():
 
 def generate_mock_rides():
     """Background task to generate mock ride requests"""
+    # Initial delay to allow app to fully load
+    time.sleep(10)
+    
     while True:
-        if not active_ride:
-            new_ride = {
-                "id": f"R{random.randint(100, 999)}",
-                "passenger_name": f"Passenger {random.randint(1, 100)}",
-                "pickup_location": random.choice(["KLCC", "KL Sentral", "Bukit Bintang", "Pavilion"]),
-                "dropoff_location": random.choice(["Mid Valley", "Bangsar", "Petaling Jaya", "Subang Jaya"]),
-                "status": "pending",
-                "estimated_fare": round(random.uniform(10, 50), 2),
-                "distance": f"{round(random.uniform(1, 15), 1)} km",
-                "estimated_time": f"{random.randint(5, 45)} mins"
-            }
-            MOCK_RIDES.append(new_ride)
-            # Emit with voice prompt
-            socketio.emit('new_ride_available', {
-                **new_ride,
-                'voice_prompt': f"New ride request from {new_ride['pickup_location']} to {new_ride['dropoff_location']}. Say accept or reject."
-            })
-        time.sleep(random.randint(30, 60))  # Generate new ride every 30-60 seconds
+        try:
+            if not active_ride:
+                new_ride = {
+                    "id": f"R{random.randint(100, 999)}",
+                    "passenger_name": f"Passenger {random.randint(1, 100)}",
+                    "pickup_location": random.choice(["KLCC", "KL Sentral", "Bukit Bintang", "Pavilion"]),
+                    "dropoff_location": random.choice(["Mid Valley", "Bangsar", "Petaling Jaya", "Subang Jaya"]),
+                    "status": "pending",
+                    "estimated_fare": round(random.uniform(10, 50), 2),
+                    "distance": f"{round(random.uniform(1, 15), 1)} km",
+                    "estimated_time": f"{random.randint(5, 45)} mins"
+                }
+                MOCK_RIDES.append(new_ride)
+                # Emit with voice prompt
+                socketio.emit('new_ride_available', {
+                    **new_ride,
+                    'voice_prompt': f"New ride request from {new_ride['pickup_location']} to {new_ride['dropoff_location']}. Say accept or reject."
+                })
+            time.sleep(random.randint(60, 120))  # Reduced frequency - every 1-2 minutes
+        except Exception as e:
+            print(f"Error in mock ride generation: {str(e)}")
+            time.sleep(60)  # Wait a minute before retrying
 
 def update_busy_areas():
     """Background task to update busy areas using Google Maps Places API"""
+    # Initial delay to allow app to fully load
+    time.sleep(15)
+    
+    # Initial data load
+    try:
+        busy_areas = maps.get_busy_areas(CENTRAL_KL)
+        if busy_areas:
+            sorted_areas = []
+            for area in busy_areas:
+                area_location = (area['coordinates']['lat'], area['coordinates']['lng'])
+                area['distance'] = maps.calculate_distance(CENTRAL_KL, area_location)
+                sorted_areas.append(area)
+            
+            sorted_areas = sorted(sorted_areas, key=lambda x: x['distance'])
+            
+            # Update cache
+            cache['busy_areas']['data'] = sorted_areas
+            cache['busy_areas']['last_updated'] = datetime.now()
+    except Exception as e:
+        print(f"Error in initial busy areas load: {str(e)}")
+    
+    # Regular updates
     while True:
         try:
-            # Get busy areas from Google Maps
-            busy_areas = maps.get_busy_areas(CENTRAL_KL)
-            if busy_areas:
-                socketio.emit('busy_areas_update', busy_areas)
-            time.sleep(300)  # Update every 5 minutes
+            current_time = datetime.now()
+            
+            # Only update if cache is expired or empty
+            if (cache['busy_areas']['data'] is None or
+                cache['busy_areas']['last_updated'] is None or
+                (current_time - cache['busy_areas']['last_updated']).seconds >= cache['busy_areas']['ttl']):
+                
+                # Get busy areas from Google Maps
+                busy_areas = maps.get_busy_areas(CENTRAL_KL)
+                if busy_areas:
+                    sorted_areas = []
+                    for area in busy_areas:
+                        area_location = (area['coordinates']['lat'], area['coordinates']['lng'])
+                        area['distance'] = maps.calculate_distance(CENTRAL_KL, area_location)
+                        sorted_areas.append(area)
+                    
+                    sorted_areas = sorted(sorted_areas, key=lambda x: x['distance'])
+                    
+                    # Update cache
+                    cache['busy_areas']['data'] = sorted_areas
+                    cache['busy_areas']['last_updated'] = current_time
+                    
+                    socketio.emit('busy_areas_update', sorted_areas)
+            
+            time.sleep(120)  # Reduced frequency - check every 2 minutes
         except Exception as e:
             print(f"Error updating busy areas: {str(e)}")
             time.sleep(60)  # Retry after 1 minute on error
 
+# Toggle voice response
+@app.route('/api/toggle-voice', methods=['POST'])
+def toggle_voice():
+    global voice_enabled
+    data = request.json
+    if data and 'enabled' in data:
+        voice_enabled = data['enabled']
+        return jsonify({'voice_enabled': voice_enabled})
+    return jsonify({'error': 'Invalid request'}), 400
+
 if __name__ == '__main__':
-    # Start background tasks
+    # Preload cache
+    preload_cache()
+    
+    # Start background tasks with lower priority
     ride_generator = threading.Thread(target=generate_mock_rides, daemon=True)
     busy_areas_updater = threading.Thread(target=update_busy_areas, daemon=True)
     ride_generator.start()
     busy_areas_updater.start()
     
     # Run the app with SocketIO
-    socketio.run(app, debug=True, allow_unsafe_werkzeug=True)
+    socketio.run(app, debug=False, allow_unsafe_werkzeug=True)

@@ -21,15 +21,28 @@ class DriverIntentProcessor:
         # Define intent categories and keywords
         self.intent_keywords = {
             "earnings": ["earn", "money", "income", "how much", "today", "week", "earnings", "made", "profit",
-                         "revenue"],
-            "navigation": ["go", "route", "direction", "navigate", "turn", "where", "take me", "path", "fastest",
-                           "quickest"],
+                         "revenue", "earned", "making", "show earnings", "my earnings", "go to earnings", 
+                         "show me earnings", "earnings page", "view earnings"],
+            "navigation": ["navigation", "navigate", "directions", "go to navigation", "show navigation", 
+                           "navigation page", "show me navigation", "view navigation"],
+            "profile": ["profile", "my profile", "account", "my account", "go to profile", "show profile", 
+                        "profile page", "show me profile", "view profile", "my details", "driver profile"],
             "hotspot": ["busy", "customer", "hotspot", "demand", "area", "where to go", "passengers", "pickup",
-                        "riders"],
+                        "riders", "busy areas", "top areas", "best spots"],
             "break": ["rest", "stop", "break", "tired", "pause", "coffee", "eat", "lunch", "bathroom", "toilet"],
             "help": ["help", "support", "assist", "emergency", "problem", "issue", "trouble", "stuck", "accident"],
             "accept_ride": ["accept", "yes", "take", "okay", "sure", "confirm", "got it"],
-            "reject_ride": ["reject", "no", "deny", "decline", "pass", "skip", "not now"]
+            "reject_ride": ["reject", "no", "deny", "decline", "pass", "skip", "not now"],
+            "chat": ["tell customer", "message customer", "send message", "chat with", "text customer"],
+            "show_chat": ["show chat", "chat history", "messages", "conversation"]
+        }
+        
+        # Page navigation mapping
+        self.page_mapping = {
+            "earnings": "/earnings",
+            "navigation": "/navigation",
+            "profile": "/profile",
+            "chat": "/chat"
         }
 
         print("Driver Intent Processor initialized")
@@ -109,14 +122,19 @@ class DriverIntentProcessor:
             confidence = 0.0
 
         # Extract basic entities based on intent
-        entities = self._extract_entities(text, max_intent)
+        entities = self._extract_entities(text, max_intent, text)
 
         print(f"Intent extracted: {max_intent} (confidence: {confidence:.2f})")
+        print(f"Entities extracted: {entities}")
         return max_intent, entities, confidence
 
-    def _extract_entities(self, text, intent):
+    def _extract_entities(self, text, intent, original_text):
         """Extract relevant entities based on intent"""
         entities = {}
+
+        # Add page navigation entity for navigation intents
+        if intent in self.page_mapping:
+            entities["page"] = self.page_mapping[intent]
 
         if intent == "navigation":
             # Look for location mentions
@@ -137,5 +155,15 @@ class DriverIntentProcessor:
                 if period in text:
                     entities["time_period"] = period
                     break
+
+        elif intent == "chat":
+            # Extract message after "tell customer" or similar phrases
+            chat_indicators = ["tell customer", "message customer", "send message", "chat with", "text customer"]
+            for indicator in chat_indicators:
+                if indicator in original_text.lower():
+                    message = original_text[original_text.lower().index(indicator) + len(indicator):].strip()
+                    if message:
+                        entities["message"] = message
+                        break
 
         return entities
